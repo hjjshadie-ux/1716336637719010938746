@@ -1,0 +1,60 @@
+name: Optimized Windows RDP via Tailscale
+
+on:
+  workflow_dispatch:
+    inputs:
+      wallpaper_url:
+        description: 'Direct URL to wallpaper image (.jpg or .png)'
+        required: false
+        default: 'https://unsplash.com'
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          hostname: github-rdp-runner
+
+      - name: Enable Remote Desktop
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+          # Set High Performance Power Plan
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+
+      - name: Set Custom Wallpaper & Optimize UI
+        run: |
+          # Download wallpaper
+          $WallpaperPath = "C:\Windows\Web\Wallpaper\custom_bg.jpg"
+          Invoke-WebRequest -Uri "${{ github.event.inputs.wallpaper_url }}" -OutFile $WallpaperPath
+
+          # Apply wallpaper & disable animations/transparency for faster RDP
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $WallpaperPath
+          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value "10" # Fill
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name EnableTransparency -Value 0
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name VisualFXSetting -Value 2
+
+          # Disable heavy background services (Windows Search & SysMain)
+          Stop-Service -Name "WSearch", "SysMain" -Force -ErrorAction SilentlyContinue
+          Set-Service -Name "WSearch", "SysMain" -StartupType Disabled -ErrorAction SilentlyContinue
+
+          # Refresh user parameters
+          RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters ,1 ,True
+
+      - name: Set RDP Password
+        run: |
+          $Password = ConvertTo-SecureString "${{ secrets.RDP_PASSWORD }}" -AsPlainText -Force
+          Set-LocalUser -Name "runneradmin" -Password $Password
+
+      - name: Print Connection Info and Keep Alive
+        run: |
+          $TailscaleIP = tailscale ip -4
+          Write-Host "Tailscale IP: $TailscaleIP"
+          Write-Host "Username: runneradmin"
+          while ($true) { Start-Sleep -Seconds 60 }
+          
